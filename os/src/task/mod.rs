@@ -15,14 +15,15 @@ mod switch;
 mod task;
 
 use crate::config::MAX_APP_NUM;
+use crate::config::SYSCALL_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
+use core::array::from_fn;
 pub use context::TaskContext;
-
+use crate::syscall::{SYSCALL_WRITE,SYSCALL_EXIT,SYSCALL_YIELD,SYSCALL_GET_TIME,SYSCALL_TRACE,};
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -39,12 +40,30 @@ pub struct TaskManager {
     inner: UPSafeCell<TaskManagerInner>,
 }
 
+const SYSCALL_IDS: [usize; SYSCALL_NUM] = [
+    SYSCALL_WRITE,
+    SYSCALL_EXIT,
+    SYSCALL_YIELD,
+    SYSCALL_GET_TIME,
+    SYSCALL_TRACE,
+];
+
+#[derive(Copy, Clone)]
+/// trace info
+pub struct TraceInfo {
+    /// syscall_ids
+    pub id: usize,
+    /// trace count 
+    pub count: usize,
+}
+
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    traces: [[TraceInfo; SYSCALL_NUM]; MAX_APP_NUM]
 }
 
 lazy_static! {
@@ -59,12 +78,22 @@ lazy_static! {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
         }
+        let traces: [[TraceInfo; SYSCALL_NUM]; MAX_APP_NUM] = from_fn(|_| {
+            from_fn(|i| {
+                TraceInfo {
+                    id: SYSCALL_IDS[i],
+                    count: 0,
+                }
+            })
+        });
+        
         TaskManager {
             num_app,
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    traces,
                 })
             },
         }
@@ -135,6 +164,20 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// 根据 app_id 和 syscall_id 查找对应的 TraceInfo（返回可变引用）
+    fn find_trace_info(&self, syscall_id: usize,) -> Option<*mut TraceInfo> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        // 1. 获取指定应用的追踪数组
+        let app_traces = inner.traces.get_mut(current)?;
+
+        // 2. 遍历内层数组，查找匹配的 syscall_id
+        app_traces
+            .iter_mut()
+            .find(|trace| trace.id == syscall_id)
+            .map(|trace| trace as *mut TraceInfo) // 将可变引用转为裸指针
+    }
 }
 
 /// Run the first task in task list.
@@ -156,6 +199,11 @@ fn mark_current_suspended() {
 /// Change the status of current `Running` task into `Exited`.
 fn mark_current_exited() {
     TASK_MANAGER.mark_current_exited();
+}
+
+/// find_trace_info, given syscall_id
+pub fn find_trace_info(syscall_id: usize) -> Option<*mut TraceInfo>{
+    TASK_MANAGER.find_trace_info(syscall_id)
 }
 
 /// Suspend the current 'Running' task and run the next task in task list.
