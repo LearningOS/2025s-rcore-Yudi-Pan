@@ -3,13 +3,24 @@
 ## 实现功能
 
 引入了一个新的系统调用 ``sys_trace``（ID 为 410）用来追踪当前任务系统调用的历史信息。
-事实上，系统会用一个二维静态数组，存储所有任务的所有系统调用的历史信息。
+事实上，kernel会用一个二维静态数组，存储所有任务的所有系统调用的历史信息。
 具体保存在TaskManagerInner中，并暴露find_trace_info方法。
 同时，在syscall函数入口处设置代码，检查并增加系统调用count。系统调用sys_trace只负责读取数据并返回值。
 
 ## 问答题
 
 一.
+
+SBI:
+RustSBI version 0.3.0-alpha.4, adapting to RISC-V SBI v1.0.0
+RustSBI-QEMU Version 0.2.0-alpha.2
+
+- ch2b_bad_address: PageFault in application, kernel killed it.
+访问了不存在的地址，出现了页表错误
+- ch2b_bad_instructions: IllegalInstruction in application, kernel killed it.
+使用了S特权级的指令，出现非法指令错误。
+- ch2b_bad_register: IllegalInstruction in application, kernel killed it.
+使用了S特权级的指令访问了受保护的寄存器，出现非法指令错误。
 
 二.
 1.刚进入 __restore 时，sp 代表了内核栈(分配过TrapContext的)，sp始终都会指向当前执行的程序流的栈，除了发生跳转之前会改变。
