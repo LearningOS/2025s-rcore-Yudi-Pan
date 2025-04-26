@@ -262,6 +262,19 @@ impl MemorySet {
             false
         }
     }
+    /// 删除指定虚拟地址范围的映射区域 erase a range of virtual address from user's address space
+    pub fn erase_map_area(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        if let Some(index) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
+        }) {
+            let mut area = self.areas.remove(index);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            trace!("not find the area in func erase_map_area");
+            false
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

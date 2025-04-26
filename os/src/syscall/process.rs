@@ -1,8 +1,9 @@
 //! Process management syscalls
-use crate::mm::{write_struct_to_user, PageTable, VirtAddr};
+use crate::config::PAGE_SIZE;
+use crate::mm::{write_struct_to_user, MapPermission, PageTable, VirtAddr};
 use crate::task::{
-    change_program_brk, current_user_token, exit_current_and_run_next, find_trace_info,
-    suspend_current_and_run_next,
+    change_program_brk, current_user_token, erase_map_area, exit_current_and_run_next,
+    find_trace_info, insert_map_area, suspend_current_and_run_next,
 };
 use crate::timer::get_time_us;
 #[repr(C)]
@@ -121,16 +122,93 @@ pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     ret
 }
 
+/// invoked by sys_mmap or sys_munmap, to check is the vitrual address range all unmapped or mapped.
+fn check_vaddr_range(start: usize, end: usize, is_unmapped: bool) -> Result<(), ()> {
+    let token = current_user_token();
+    let page_table = PageTable::from_token(token);
+    // Contact is allowed, but crossing is not allowed, [start, start + len)
+    let start_vpn=VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(end - 1).floor();
+    match is_unmapped {
+        true => {
+            if let Some(pte) = page_table.translate(start_vpn){
+                if pte.is_valid() {
+                    return Err(());
+                }
+            } else if let Some(pte) = page_table.translate(end_vpn) {
+                if pte.is_valid() {
+                    return Err(());
+                }
+            }
+        }
+        false => {
+            // if page_table.translate(start_vpn).is_none()
+            //     || page_table.translate(end_vpn).is_none()
+            // {
+            //     return Err(());
+            // }
+            if let Some(pte) = page_table.translate(start_vpn){
+                if !pte.is_valid() {
+                    return Err(());
+                }
+            } else if let Some(pte) = page_table.translate(end_vpn) {
+                if !pte.is_valid() {
+                    return Err(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    if start & (PAGE_SIZE - 1) != 0 {
+        return -1;
+    }
+
+    if (prot & !0x7) != 0 || (prot & 0x7) == 0 {
+        return -1;
+    }
+    if len == 0 {
+        return 0;
+    }
+    let mut flags = MapPermission::empty();
+    if (prot & 0x1) != 0 {
+        flags.insert(MapPermission::R);
+    } // prot第0位 → R
+    if (prot & 0x2) != 0 {
+        flags.insert(MapPermission::W);
+    } // prot第1位 → W
+    if (prot & 0x4) != 0 {
+        flags.insert(MapPermission::X);
+    } // prot第2位 → X
+    flags.insert(MapPermission::U);
+    if check_vaddr_range(start, start + len, true).is_err() {
+        return -1;
+    }
+    // let page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    insert_map_area(start, start + len, flags);
+    0
 }
 
 // YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel: sys_munmap");
+    if start & (PAGE_SIZE - 1) != 0 {
+        return -1;
+    }
+    if len == 0 {
+        return 0;
+    }
+    if check_vaddr_range(start, start + len, false).is_err() {
+        return -1;
+    }
+    if erase_map_area(start, start + len) {
+        0
+    } else {
+        -1
+    }
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

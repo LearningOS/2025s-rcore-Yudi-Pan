@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -198,6 +199,22 @@ impl TaskManager {
             .find(|trace| trace.id == syscall_id)
             .map(|trace| trace as *mut TraceInfo) // 将可变引用转为裸指针
     }
+    
+    /// insert a range of virtual address into current user's address space
+    fn insert_map_area(&self, start: usize, end: usize, permission: MapPermission){
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(end), permission);
+        trace!("insert sucessfully in func insert_map_area");
+    }
+    /// erase a range of virtual address from current user's address space
+    fn erase_map_area(&self, start: usize, end: usize) -> bool{
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        let start_vpn=VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(end).ceil();
+        inner.tasks[cur].memory_set.erase_map_area(start_vpn, end_vpn)
+    }
 }
 
 /// Run the first task in task list.
@@ -252,3 +269,14 @@ pub fn change_program_brk(size: i32) -> Option<usize> {
 pub fn find_trace_info(syscall_id: usize) -> Option<*mut TraceInfo>{
     TASK_MANAGER.find_trace_info(syscall_id)
 }
+
+/// insert a range of virtual address into current user's address space
+pub fn insert_map_area(start: usize, end: usize, permission: MapPermission) {
+    TASK_MANAGER.insert_map_area(start,end,permission)
+}
+
+/// erase a range of virtual address from current user's address space
+pub fn erase_map_area(start: usize, end: usize) -> bool{
+    TASK_MANAGER.erase_map_area(start,end)
+}
+
