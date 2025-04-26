@@ -24,6 +24,8 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+use crate::config::SYSCALL_NUM;
+use crate::syscall::*;
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -40,12 +42,33 @@ pub struct TaskManager {
     inner: UPSafeCell<TaskManagerInner>,
 }
 
+const SYSCALL_IDS: [usize; SYSCALL_NUM] = [
+    SYSCALL_WRITE,
+    SYSCALL_EXIT,
+    SYSCALL_YIELD,
+    SYSCALL_GET_TIME,
+    SYSCALL_TRACE,
+    SYSCALL_MUNMAP,
+    SYSCALL_MMAP,
+    SYSCALL_SBRK,
+];
+
+#[derive(Copy, Clone)]
+/// trace info
+pub struct TraceInfo {
+    /// syscall_ids
+    pub id: usize,
+    /// trace count 
+    pub count: usize,
+}
+
 /// The task manager inner in 'UPSafeCell'
 struct TaskManagerInner {
     /// task list
     tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
+    traces: Vec<[TraceInfo; SYSCALL_NUM]>,
 }
 
 lazy_static! {
@@ -58,12 +81,22 @@ lazy_static! {
         for i in 0..num_app {
             tasks.push(TaskControlBlock::new(get_app_data(i), i));
         }
+        let traces: Vec<[TraceInfo; SYSCALL_NUM]> = (0..num_app)
+        .map(|_| {
+            let mut arr = [TraceInfo { id: 0, count: 0 }; SYSCALL_NUM];
+            for i in 0..SYSCALL_NUM {
+                arr[i].id = SYSCALL_IDS[i];
+            }
+            arr
+        })
+        .collect();
         TaskManager {
             num_app,
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    traces,
                 })
             },
         }
@@ -153,6 +186,18 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// 根据 app_id 和 syscall_id 查找对应的 TraceInfo（返回可变引用）
+    fn find_trace_info(&self, syscall_id: usize,) -> Option<*mut TraceInfo> {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let app_traces = inner.traces.get_mut(current)?;
+
+        app_traces
+            .iter_mut()
+            .find(|trace| trace.id == syscall_id)
+            .map(|trace| trace as *mut TraceInfo) // 将可变引用转为裸指针
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +246,9 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// find_trace_info, given syscall_id
+pub fn find_trace_info(syscall_id: usize) -> Option<*mut TraceInfo>{
+    TASK_MANAGER.find_trace_info(syscall_id)
 }
