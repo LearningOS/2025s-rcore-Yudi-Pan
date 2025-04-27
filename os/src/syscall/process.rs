@@ -67,7 +67,6 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-/// TODO: Finish sys_trace to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     trace!("kernel: sys_trace");
@@ -123,23 +122,24 @@ pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
 }
 
 /// invoked by sys_mmap or sys_munmap, to check is the vitrual address range all unmapped or mapped.
-fn check_vaddr_range(start: usize, end: usize, is_unmapped: bool) -> Result<(), ()> {
+fn check_vaddr_range(start: usize, end: usize, check_unmapped: bool) -> Result<(), ()> {
     let token = current_user_token();
     let page_table = PageTable::from_token(token);
     // Contact is allowed, but crossing is not allowed, [start, start + len)
-    let start_vpn=VirtAddr::from(start).floor();
-    let end_vpn = VirtAddr::from(end - 1).floor();
-    match is_unmapped {
+    let mut start_vpn=VirtAddr::from(start).floor();
+    let end_vpn = VirtAddr::from(end).ceil();
+    match check_unmapped {
         true => {
-            if let Some(pte) = page_table.translate(start_vpn){
-                if pte.is_valid() {
-                    return Err(());
+            while start_vpn != end_vpn {
+                if let Some(pte) = page_table.translate(start_vpn){
+                    if pte.is_valid() {
+                        return Err(());
+                    }
                 }
-            } else if let Some(pte) = page_table.translate(end_vpn) {
-                if pte.is_valid() {
-                    return Err(());
-                }
+                // None or Some but is not valid, pass
+                start_vpn.0 += 1;
             }
+            Ok(())
         }
         false => {
             // if page_table.translate(start_vpn).is_none()
@@ -147,18 +147,21 @@ fn check_vaddr_range(start: usize, end: usize, is_unmapped: bool) -> Result<(), 
             // {
             //     return Err(());
             // }
-            if let Some(pte) = page_table.translate(start_vpn){
-                if !pte.is_valid() {
+            while start_vpn != end_vpn {
+                if let Some(pte) = page_table.translate(start_vpn){
+                    if !pte.is_valid() {
+                        return Err(());
+                    }
+                } else {
                     return Err(());
                 }
-            } else if let Some(pte) = page_table.translate(end_vpn) {
-                if !pte.is_valid() {
-                    return Err(());
-                }
+                // None or Some but is not valid, Err!
+                start_vpn.0 += 1;
             }
+            Ok(())
         }
     }
-    Ok(())
+    
 }
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
