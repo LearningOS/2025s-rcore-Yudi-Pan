@@ -1,7 +1,5 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use core::mem::size_of;
-
 use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -73,7 +71,7 @@ impl PageTableEntry {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
     /// The page pointered by page table entry is user visible?
-    pub fn is_user_visible(&self) -> bool {
+    pub fn user_visible(&self) -> bool {
         (self.flags() & PTEFlags::U) != PTEFlags::empty()
     }
 }
@@ -192,18 +190,18 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     v
 }
 
-/// 跨页安全写结构体：将结构体 `value` 写入用户虚拟地址 `user_va` 所指向的地址中。
-pub fn write_struct_to_user<T>(token: usize, user_va: usize, value: &T) -> Result<(), &'static str> {
-    let page_table = PageTable::from_token(token);
-    let size = size_of::<T>();
+/// 跨页安全写结构体：将结构体 `value` 写入用户虚拟地址 `start_va` 所指向的地址中。
+pub fn write_struct_to_user<T>(page_table: PageTable, start_va: VirtAddr, value: &T) -> Result<(), &'static str> {
+    let size = core::mem::size_of::<T>();
     let bytes = unsafe {
         core::slice::from_raw_parts(value as *const _ as *const u8, size)
     };
-
+    // 每次都要查页表，如果结构体很大，可能有性能损失。
+    // 但只要TLB出手，一切都会好起来的！
     for (offset, &byte) in bytes.iter().enumerate() {
-        let va = VirtAddr::from(user_va + offset);
+        let va = VirtAddr::from(start_va.0 + offset);
         let pte = page_table.translate(va.floor()).unwrap();
-        if pte.readable() && pte.writable() {
+        if pte.user_visible() && pte.readable() && pte.writable() {
             let ptr = (pte.ppn().0 << 12 | va.page_offset()) as *mut u8;
             unsafe {
                 *ptr = byte;
